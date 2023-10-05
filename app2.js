@@ -1,6 +1,7 @@
 const fs = require('fs');
 const pdf = require('pdf-parse');
 const _ = require('lodash');
+
 const { titles, tax_districts } = require('./options/meta')
 async function extractTextFromPDF(pdfFilePath, pageNumber) {
     const dataBuffer = fs.readFileSync(pdfFilePath);
