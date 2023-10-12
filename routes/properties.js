@@ -4,27 +4,26 @@ const { Property } = require('../models/deed')
 const router = express.Router();
 
 router.get('/', async (req, res) => {
-const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10 } = req.query;
+    try {
+        const allProperties = await Property.find()
+        .limit(limit * 1)
+        .skip((page - 1) * limit)
+        .sort('address');
 
-try {
-    const allProperties = await Property.find()
-    .limit(limit * 1)
-    .skip((page - 1) * limit)
-    .sort('address');
+        const count = await Property.countDocuments();
 
-    const count = await Property.countDocuments();
-
-    res.json({
-        metadata: {
-            count: count,
-            totalPages: Math.ceil(count / limit),
-            currentPage: page,
-        },
-        data: allProperties
-    });
-} catch (err) {
-    console.error(err.message);
-}
+        res.json({
+            metadata: {
+                count: count,
+                totalPages: Math.ceil(count / limit),
+                currentPage: page,
+            },
+            data: allProperties
+        });
+    } catch (err) {
+        console.error(err.message);
+    }
 });
 
 router.get('/:id', async (req, res) => {
