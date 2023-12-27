@@ -48,17 +48,28 @@ extractTextFromPDF(pdfFilePath, pageNumber).then(text => {
                 .then(response => {
                     console.log(`Request ended for  Parcel Values ID ${parcelId} at ${new Date().toISOString()}`);
                     const $ = cheerio.load(response.data);
-                    isareturn buildValueData(parcelId, url, $)
+                    return buildValueData(parcelId, url, $)
                 })
                 .catch(error => {
                     console.error('Error: ', error)
                     return null
                 })
         })
-        async function foo() {
-            return Promise.resolved('hello');
-        }
-        async
+        const parcelTaxes = parcelIds.map((parcelId, index) => {
+            const url = "https://publicaccess.dekalbtax.org/datalets/datalet.aspx?mode=dek_profile&UseSearch=no&pin="+parcelId
+            console.log(`Processing Parcel Values at ID ${parcelId} at index ${index}. URL: ${url}`);
+            console.log(`Request started for Parcel Values at ID ${parcelId} at ${new Date().toISOString()}`);
+            return axios.get(url)
+                .then(response => {
+                    console.log(`Request ended for  Parcel Values ID ${parcelId} at ${new Date().toISOString()}`);
+                    const $ = cheerio.load(response.data);
+                    return buildTaxData(parcelId, url, $)
+                })
+                .catch(error => {
+                    console.error('Error: ', error)
+                    return null
+                })
+        })
     })
 }).catch(error => {
     console.error(error);
@@ -120,7 +131,6 @@ function buildData(parcelId, url, $){
             }
         })
     })
-
     return({
         parcel_information: {
             status: status,
@@ -175,6 +185,29 @@ function buildValueData(parcelId, url, $){
         parcel_information: {
             appraisedValues: appraisedValues,
             assessedValues: assessedValues,
+        }
+    })
+}
+
+function buildTaxData(parcelId, url, $){
+    $('#datalet_div_7 > table > tbody:nth-child(1)').last().each((index, element) => {
+        taxBills = []
+        $(element).contents().each((index, element) => {
+            values = []
+            $(element).contents().each((index, element) => {
+                if ($(element).text() != ""){
+                    values.push(($(element).text()))
+                }
+            })
+            taxBills.push(values)
+            console.log(values)
+        })
+    })
+
+    return({
+        parcel_id: parcelId,
+        tax_information: {
+            taxBills: taxBills,
         }
     })
 }
