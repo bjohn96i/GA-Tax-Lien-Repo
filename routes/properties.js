@@ -6,10 +6,11 @@ const router = express.Router();
 router.get('/', async (req, res) => {
     const { page = 1, limit = 10 } = req.query;
     try {
+        console.log(await Property.find())
         const allProperties = await Property.find()
         .limit(limit * 1)
         .skip((page - 1) * limit)
-        .sort('address');
+        .sort('metadata.parcel_information.address');
 
         const count = await Property.countDocuments();
 
