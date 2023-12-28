@@ -2,78 +2,175 @@ const pdf = require('pdf-parse');
 const fs = require('fs');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const dataBuilder = require('./modules/dataBuilder.js')
+require('dotenv').config()
+
+const { MongoClient, ServerApiVersion } = require('mongodb');
+const uri = process.env.MONGO_DB;
+// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  }
+});
 
 async function extractTextFromPDF(pdfFilePath, pageNumber) {
     const dataBuffer = fs.readFileSync(pdfFilePath);
     const data = await pdf(dataBuffer, {max: pageNumber, normalizeWhitespace: true, disableCombineTextItems: true});
     return data.text;
 }
+async function run(){
+	try {
+        await client.connect();
+        const database = client.db("deedData");
+		const taxDeedDB = database.collection("taxDeeds");
 
-const pdfFilePath = './files/test.pdf';
-const pageNumber = 1; // Change this to the desired page number
-extractTextFromPDF(pdfFilePath, pageNumber).then(text => {
-    let lines = text.trim().split('\n');
+        const pdfFilePath = './files/test2.pdf';
+        const pageNumber = 100; // Change this to the desired page number
+        extractTextFromPDF(pdfFilePath, pageNumber).then(text => {
+            let lines = text.trim().split('\n');
 
-    pages = splitPages(lines)
-    console.log('pages '+ pages.length) 
-    pages.forEach((page, index) => {
-        const parcelIdRegex = /^\d{7}$|^\d{2}\s\d{3}\s\d{2}\s\d{3}$/;
+            pages = splitPages(lines);
+            console.log('pages ' + pages.length);
 
-        parcelIds = page.filter(a => parcelIdRegex.test(a.trim()));
-        page = page.filter(a => !parcelIdRegex.test(a.trim()))
+            const resultsByParcelId = {}; // Object to store results by parcelId
 
-        console.log(parcelIds.length)
-        console.log(parcelIds)
+            const pagePromises = pages.map(async (page, index) => {
+                const parcelIdRegex = /^\d{7}$|^\d{2}\s\d{3}\s\d{2}\s\d{3}$/;
+                let parcelIds = page.filter(a => parcelIdRegex.test(a.trim()));
 
-        const parcelInfo = parcelIds.map((parcelId, index) => {
-            const url = "https://propertyappraisal.dekalbcountyga.gov/datalets/datalet.aspx?mode=profileall&UseSearch=no&pin="+parcelId
-            console.log(`Processing Parcel ID ${parcelId} at index ${index}. URL: ${url}`);
-            console.log(`Request started for Parcel ID ${parcelId} at ${new Date().toISOString()}`);
-            return axios.get(url)
-                .then(response => {
-                    console.log(`Request ended for Parcel ID ${parcelId} at ${new Date().toISOString()}`);
-                    const $ = cheerio.load(response.data);
-                    return buildData(parcelId, url, $)
+                parcelIds = parcelIds.filter(onlyUnique);
+                console.log(parcelIds)
+                
+                const dataUrls = parcelIds.map(parcelId => {
+                    const url = "https://propertyappraisal.dekalbcountyga.gov/datalets/datalet.aspx?mode=profileall&UseSearch=no&pin=" + parcelId;
+                    return axios.get(url)
+                        .then(response => {
+                            const $ = cheerio.load(response.data);
+                            const metadata =  dataBuilder.buildData(parcelId, url, $);
+                            return { parcelId, metadata };
+                        })
+                        .catch(error => {
+                            console.error('Error fetching data: ', error);
+                            return { parcelId, metadata: null };
+                        });
+                });
+
+                const valueUrls = parcelIds.map(parcelId => {
+                    const url = "https://publicaccess.dekalbtax.org/datalets/datalet.aspx?mode=value_history&UseSearch=no&pin=" + parcelId;
+                    return axios.get(url)
+                        .then(response => {
+                            const $ = cheerio.load(response.data);
+                            const valueData = dataBuilder.buildValueData(parcelId, url, $)
+                            return { parcelId, valueData };
+                        })
+                        .catch(error => {
+                            console.error('Error fetching values: ', error);
+                            return { parcelId, valueData: null };
+                        });
+                });
+
+                const taxUrls = parcelIds.map(parcelId => {
+                    const url = "https://publicaccess.dekalbtax.org/datalets/datalet.aspx?mode=dek_profile&UseSearch=no&pin=" + parcelId;
+                    return axios.get(url)
+                        .then(response => {
+                            const $ = cheerio.load(response.data);
+                            const bills = dataBuilder.buildTaxData(parcelId, url, $);
+                            const penalties = dataBuilder.buildTaxPenalties(parcelId, url, $);
+                            return { parcelId, bills, penalties };
+                        })
+                        .catch(error => {
+                            console.error('Error fetching taxes: ', error);
+                            return { parcelId, bills: null, penalties: null };
+                        });
+                });
+
+                const payoffUrls = parcelIds.map(parcelId => {
+                    const url = "https://publicaccess.dekalbtax.org/datalets/datalet.aspx?mode=dek_prof_c10&UseSearch=no&pin=" + parcelId;
+                    return axios.get(url)
+                        .then(response => {
+                            const $ = cheerio.load(response.data);
+                            const payoff = dataBuilder.buildPayoffData(parcelId, url, $);
+                            return { parcelId, payoff };
+                        })
+                        .catch(error => {
+                            console.error('Error fetching taxes: ', error);
+                            return { parcelId, payoff_data: null };
+                        });
+                });
+
+                const dataResults = await Promise.all(dataUrls);
+                const valueResults = await Promise.all(valueUrls);
+                const taxResults = await Promise.all(taxUrls);
+                const payoffResults = await Promise.all(payoffUrls);
+
+                dataResults.forEach(result => {
+                    const { parcelId, metadata } = result;
+                    if (!resultsByParcelId[parcelId]) {
+                        resultsByParcelId[parcelId] = { metadata, value: null, tax: null, payoff_data: null };
+                    } else {
+                        resultsByParcelId[parcelId].metadata = metadata;
+                    }
+                });
+
+                valueResults.forEach(result => {
+                    const { parcelId, valueData } = result;
+                    if (!resultsByParcelId[parcelId]) {
+                        resultsByParcelId[parcelId] = { metadata: null, value: valueData, tax: null, payoff_data: null };
+                    } else {
+                        resultsByParcelId[parcelId].value = valueData;
+                    }
+                });
+
+                taxResults.forEach(result => {
+                    const { parcelId, bills, penalties } = result;
+                    if (!resultsByParcelId[parcelId]) {
+                        resultsByParcelId[parcelId] = { metadata: null, value: null, tax: { bills, penalties }, payoff_data: null };
+                    } else {
+                        resultsByParcelId[parcelId].tax = { bills, penalties };
+                    }
+                });
+
+                payoffResults.forEach(result => {
+                    const { parcelId, payoff } = result;
+                    if (!resultsByParcelId[parcelId]) {
+                        resultsByParcelId[parcelId] = { metadata: null, value: null, tax: null, payoff };
+                    } else {
+                        resultsByParcelId[parcelId].payoff_data = payoff;
+                    }
+                });
+            });
+
+            Promise.all(pagePromises)
+                .then(async results => {
+                    const options = { ordered: true };
+                    // var properties = Object.entries(resultsByParcelId).map(([key, value]) => ({ [key]: value }))
+                    // var properties = Object.values(resultsByParcelId).map(obj => ({ ...obj }));
+                    var properties = Object.entries(resultsByParcelId).map(([key, value]) => ({
+                        parcelId: key,
+                        ...value
+                      }));
+                    console.log(properties)
+                    const result = await taxDeedDB.insertMany(properties, options);
+                    console.log(`${result.insertedCount} documents were inserted`)
                 })
-                .catch(error => {
-                    console.error('Error: ', error)
-                    return null
-                })
-        })
-        const parcelValues = parcelIds.map((parcelId, index) => {
-            const url = "https://publicaccess.dekalbtax.org/datalets/datalet.aspx?mode=value_history&UseSearch=no&pin="+parcelId
-            console.log(`Processing Parcel Values at ID ${parcelId} at index ${index}. URL: ${url}`);
-            console.log(`Request started for Parcel Values at ID ${parcelId} at ${new Date().toISOString()}`);
-            return axios.get(url)
-                .then(response => {
-                    console.log(`Request ended for  Parcel Values ID ${parcelId} at ${new Date().toISOString()}`);
-                    const $ = cheerio.load(response.data);
-                    return buildValueData(parcelId, url, $)
-                })
-                .catch(error => {
-                    console.error('Error: ', error)
-                    return null
-                })
-        })
-        const parcelTaxes = parcelIds.map((parcelId, index) => {
-            const url = "https://publicaccess.dekalbtax.org/datalets/datalet.aspx?mode=dek_profile&UseSearch=no&pin="+parcelId
-            console.log(`Processing Parcel Values at ID ${parcelId} at index ${index}. URL: ${url}`);
-            console.log(`Request started for Parcel Values at ID ${parcelId} at ${new Date().toISOString()}`);
-            return axios.get(url)
-                .then(response => {
-                    console.log(`Request ended for  Parcel Values ID ${parcelId} at ${new Date().toISOString()}`);
-                    const $ = cheerio.load(response.data);
-                    return buildTaxData(parcelId, url, $)
-                })
-                .catch(error => {
-                    console.error('Error: ', error)
-                    return null
-                })
-        })
-    })
-}).catch(error => {
-    console.error(error);
-});
+                .catch(err => {
+                    console.error('Error processing pages: ', err);
+                });
+        }).catch(error => {
+            console.error('Error extracting text from PDF: ', error);
+        });
+    }
+    finally {
+		// await client.close();
+	}
+}
+
+function onlyUnique(value, index, array) {
+    return array.indexOf(value) === index;
+}
 
 function splitPages(lines){
 	const pageRegex = /^Page\s([1-9]\d{0,5}|10000)DQ205GADEK$/;
@@ -96,118 +193,4 @@ function splitPages(lines){
 	}
 	return pages
 }
-
-function buildData(parcelId, url, $){
-    const status = $('#Parcel > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)').text().trim()
-    const altPID = $('#Parcel > tbody:nth-child(1) > tr:nth-child(3) > td:nth-child(2)').text().trim()
-    const address = $('#Parcel > tbody:nth-child(1) > tr:nth-child(4) > td:nth-child(2)').text().trim()
-    const unit = $('#Parcel > tbody:nth-child(1) > tr:nth-child(5) > td:nth-child(2)').text().trim()
-    const city = $('#Parcel > tbody:nth-child(1) > tr:nth-child(6) > td:nth-child(2)').text().trim()
-    const zipCode = $('#Parcel > tbody:nth-child(1) > tr:nth-child(7) > td:nth-child(2)').text().trim()
-    const neighborhood = $('#Parcel > tbody:nth-child(1) > tr:nth-child(8) > td:nth-child(2)').text().trim()
-    const superNBHD = $('#Parcel > tbody:nth-child(1) > tr:nth-child(9) > td:nth-child(2)').text().trim()
-    const classZone = $('#Parcel > tbody:nth-child(1) > tr:nth-child(10) > td:nth-child(2)').text().trim()
-    const landuse = $('#Parcel > tbody:nth-child(1) > tr:nth-child(11) > td:nth-child(2)').text().trim()
-    const livingUnits = $('#Parcel > tbody:nth-child(1) > tr:nth-child(12) > td:nth-child(2)').text().trim()
-    const zoning = $('#Parcel > tbody:nth-child(1) > tr:nth-child(13) > td:nth-child(2)').text().trim()
-    const apraiser = $('#Parcel > tbody:nth-child(1) > tr:nth-child(14) > td:nth-child(2)').text().trim()
-
-    // Mailing Address
-    $('#datalet_div_2 > table > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)').last().each((index, element) => {
-        mailingAddress = []
-        $(element).contents().each((index, element) => {
-            if($(element).text() != ""){
-                mailingAddress.push($(element).text())
-            }
-        })
-    });
-    
-    // Owners
-    $('#datalet_div_3 > table > tbody:nth-child(1) > tr:nth-child(2)').last().each((index, element) => {
-        owner = []
-        $(element).contents().each((index, element) => {
-            if ($(element).text() != ""){
-                owner.push($(element).text())
-            }
-        })
-    })
-    return({
-        parcel_information: {
-            status: status,
-            parcel_id: parcelId,
-            alternate_parcel_id: altPID,
-            address: address, 
-            address_unit: unit,
-            city: city,
-            zip_code: zipCode,
-            neighborhood: neighborhood,
-            superNBHD: superNBHD,
-            class: classZone,
-            land_code: landuse,
-            livingUnits: livingUnits,
-            zoning: zoning,
-            appraiser: apraiser,
-            owners: owner,
-            ownermailingAddress: mailingAddress,
-            apraisalUrl: url,
-            propertyMapUrl: 'https://publicaccess.dekalbtax.org/maps/map.aspx?UseSearch=no&pin='+parcelId
-        }
-    })
-}
-
-function buildValueData(parcelId, url, $){
-    $('#datalet_div_0 > table > tbody:nth-child(1)').last().each((index, element) => {
-        appraisedValues = []
-        $(element).contents().each((index, element) => {
-            values = []
-            $(element).contents().each((index, element) => {
-                if ($(element).text() != ""){
-                    values.push(($(element).text()))
-                }
-            })
-            appraisedValues.push(values)
-        })
-    })
-    $('#datalet_div_1 > table > tbody:nth-child(1)').last().each((index, element) => {
-        assessedValues = []
-        $(element).contents().each((index, element) => {
-            values = []
-            $(element).contents().each((index, element) => {
-                if ($(element).text() != ""){
-                    values.push(($(element).text()))
-                }
-            })
-            assessedValues.push(values)
-        })
-    })
-    return({
-        parcel_id: parcelId,
-        parcel_information: {
-            appraisedValues: appraisedValues,
-            assessedValues: assessedValues,
-        }
-    })
-}
-
-function buildTaxData(parcelId, url, $){
-    $('#datalet_div_7 > table > tbody:nth-child(1)').last().each((index, element) => {
-        taxBills = []
-        $(element).contents().each((index, element) => {
-            values = []
-            $(element).contents().each((index, element) => {
-                if ($(element).text() != ""){
-                    values.push(($(element).text()))
-                }
-            })
-            taxBills.push(values)
-            console.log(values)
-        })
-    })
-
-    return({
-        parcel_id: parcelId,
-        tax_information: {
-            taxBills: taxBills,
-        }
-    })
-}
+run().catch(console.dir);
