@@ -1,27 +1,34 @@
 {
-  "name": "backend",
+  "name": "ga-tax-lien",
   "version": "1.0.0",
   "description": "",
   "main": "app.js",
   "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon app.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "injest": "node injestor.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bjohn96i/mongo-test.git"
+    "url": "git+https://github.com/bjohn96i/GA-Tax-Lien.git"
   },
-  "author": "",
+  "author": "Johnathan Alexander",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/bjohn96i/mongo-test/issues"
+    "url": "https://github.com/bjohn96i/GA-Tax-Lien/issues"
   },
-  "homepage": "https://github.com/bjohn96i/mongo-test#readme",
+  "homepage": "https://github.com/bjohn96i/GA-Tax-Lien#readme",
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "mongoose": "^7.5.4"
+    "mongoose": "^7.5.4",
+    "axios": "^1.5.1",
+    "cheerio": "^1.0.0-rc.12",
+    "csvtojson": "^2.0.10",
+    "mongodb": "^6.8.0",
+    "p-limit": "^4.0.0",
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
